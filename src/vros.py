@@ -1,87 +1,91 @@
-SERVER_HOST = "127.0.0.1"
-SERVER_PORT = 5000
-
 from enum import Enum
-from uuid import uuid4
-
 from typing import Any
-from socket import socket, AF_INET, SOCK_STREAM
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-
-class BaseField(BaseModel):
-    name: str = Field(default="?")
-    data: Any = Field(default=None)
-    
-
-class BytesField(BaseField):
-    data: bytes = Field(default=b"")
-
-
-class ReplicatorType(Enum):
-    UNKNOWN = "unknown_replicator"
-    SERVER = "server_replicator"
-    CLIENT = "client_replicator"
-        
 
 class ReplicationType(Enum):
-    UNKNOWN = "unknown_replication"
+    LOCAL_ONLY = "local_only"
     
-    CREATE = "create_replication"
-    UPDATE = "update_replication"
-    DELETE = "delete_replication"
-    
-    EMIT = "emit_replication"    
-    
+    SERVER_TO_CLIENT = "server_to_client"
+    CLIENT_TO_SERVER = "client_to_server"
 
-class ReplicationCommand(BaseModel):
-    id: str = Field(default_factory=lambda: uuid4().hex)
-    
-    replication_type: ReplicationType = Field(default=ReplicationType.UNKNOWN)
-    
 
-class BaseReplicator(BaseModel):
-    id: str = Field(default_factory=lambda: uuid4().hex)
+class ReplicationEnvironment(Enum):
+    UNKNOWN = "unknown_environment"
     
-    server_host: str = Field(default=SERVER_HOST)
-    server_port: int = Field(default=SERVER_PORT)
-    
-    replicator_type: ReplicatorType = Field(default=ReplicatorType.UNKNOWN)
-    
-    connection_socket: socket = Field(
-        default_factory=lambda: socket(AF_INET, SOCK_STREAM)
+    SERVER = "server_environment"
+    CLIENT = "client_environment"
+
+
+
+
+
+class ReplicationModel(BaseModel):
+    replication_type: ReplicationType = Field(
+        default=ReplicationType.LOCAL_ONLY
     )
     
-    available_fields: list[BaseField] = Field(default_factory=list)
+    replication_environment: ReplicationEnvironment = Field(
+        default=ReplicationEnvironment.UNKNOWN
+    )
     
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    def __replicate(self, name: str, value: Any):
+        print("replicating", name, value)
     
-    def add_field(self, field: BaseField) -> BaseField:
-        self.available_fields.append(field)
-    
-
-class ClientReplicator(BaseReplicator):
-    replicator_type: ReplicatorType = Field(default=ReplicatorType.CLIENT)
-    
-    def establish(self):
-        self.connection_socket.connect(
-            (self.server_host, self.server_port)
-        )
-
-
-class ServerReplicator(BaseReplicator):
-    listen: int = Field(default=2)
-    
-    replicator_type: ReplicatorType = Field(default=ReplicatorType.SERVER)
-    
-    def establish(self):
-        self.connection_socket.bind(
-            (self.server_host, self.server_port)
-        )
+    def __setattr__(self, name: str, value: Any) -> None:
+        if self.replication_type is ReplicationType.SERVER_TO_CLIENT:
+            if self.replication_environment is ReplicationEnvironment.CLIENT:
+                raise Exception(
+                    "Client cannot setattr to a model controlled by the server!"
+                )
+        
+        if self.replication_type is ReplicationType.CLIENT_TO_SERVER:
+            if self.replication_environment is ReplicationEnvironment.SERVER:
+                raise Exception(
+                    "Server cannot setattr to a model controlled by the server!"
+                )
+        
+        if not self.replication_type is ReplicationType.LOCAL_ONLY:
+            replication_meta = type(self).ReplicationMeta
+     
+            include = None
+            exclude = None
             
-        self.connection_socket.listen(self.listen)
+            try:
+                include = getattr(replication_meta, "include")
+                include.extend(
+                    ReplicationModel.ReplicationMeta.include
+                )
+            except:
+                include = ReplicationModel.ReplicationMeta.include
+            
+            try:
+                exclude = getattr(replication_meta, "exclude")
+                exclude.extend(
+                    ReplicationModel.ReplicationMeta.exclude
+                )
+            except:
+                exclude = ReplicationModel.ReplicationMeta.exclude
+            
+            if exclude.count(name) == 0:
+                if len(include) > 0:
+                    if include.count(name) == 1:
+                        self.__replicate(name, value)
+                else:
+                    self.__replicate(name, value)
+        
+        return super().__setattr__(name, value)
     
-    
-    def replicate_field(self, field_name: str) -> BaseField:
+    async def establish(self):
         pass
+    
+    async def on_establish(self):
+        
+    
+    class ReplicationMeta:
+        exclude=[
+            "replication_type", "replication_owner"
+        ]
+        
+        include=[]

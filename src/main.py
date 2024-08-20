@@ -2,44 +2,41 @@ import time
 import asyncio
 import threading
 
-from vros import ServerReplicator, ClientReplicator, BytesField
+from uuid import uuid4
+
+from vros import *
 
 
-async def client():
-    client = ClientReplicator()
+class GlobalVariables(ReplicationModel):
+    server_message: str = Field(default="server message!")
     
-    @client.field("echo")
-    async def echo_field(bytes_field: BytesField):
-        print("bytes field was updated to", bytes_field)
-    
-    
-    await client.establish()
-    
+    class ReplicationMeta:
+        exclude=[]
+        include=[]
 
 
 async def server():
-    server = ServerReplicator()
-    
-    echo_field = BytesField(
-        name="echo",
-        data=b"hello world?"
+    variables = GlobalVariables(
+        replication_type=ReplicationType.SERVER_TO_CLIENT,
+        replication_environment=ReplicationEnvironment.SERVER
     )
     
-    # Add your replicateable fields.
-    server.add_field(echo_field)
     
-    threading.Thread(target=server.establish, args=()).start()
+    threading.Thread(target=asyncio.run, args=(variables.establish(),)).start()
     
-    while True:
-        time.sleep(1)
-        
-        # Field is being replicated!
-        echo_field.data = b"Huhh!?"
-        server.replicate_field(echo_field.name)
-    #print(server.connection_socket)
+    variables.server_message = "Hello there!"
     
 
-
-if __name__ == "__main__":
-    threading.Thread(target=asyncio.run, args=(server(),)).start()
-    asyncio.run(client())
+async def client():
+    variables = GlobalVariables(
+        replication_type=ReplicationType.SERVER_TO_CLIENT,
+        replication_environment=ReplicationEnvironment.CLIENT
+    )
+    
+    
+    
+    await variables.establish()
+    
+    
+asyncio.run(server())
+asyncio.run(client())
